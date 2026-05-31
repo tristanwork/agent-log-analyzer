@@ -9,18 +9,26 @@ The local analyzer can classify unified-diff hunks against the current worktree 
 - `reverted`: none of the added lines remain.
 - `unknown`: the target is unavailable or the hunk has no added lines.
 
-Default output is upload-safe: file paths are represented as SHA-256 hashes and only counts, hunk totals, line totals, survival buckets, and optional yield ratios are emitted. Local debugging may opt in to raw paths with `ExposePaths`, but code hunks and file contents are never included in the result.
+Default output is upload-safe: file paths are represented as SHA-256 hashes and only counts, hunk totals, line totals, survival buckets, grouping metadata, and optional yield ratios are emitted. Local debugging may opt in to raw paths with `ExposePaths`, but code hunks and file contents are never included in the result.
+
+Reports include `summary.groups` so paid scans can connect survival metrics to privacy-safe execution context:
+
+- `project_cwd_hash`: SHA-256 of the project/cwd value, defaulting to the repository root when no explicit value is supplied.
+- `source_harness`: normalized harness/source ID, such as `codex`, `claude_code`, or `copilot`.
+- `session_hash`: SHA-256 of the session ID when provided.
+
+The grouping fields allow cloud reports to aggregate by project, harness, and session without uploading raw local paths or private session identifiers.
 
 When spend data is available, callers can provide total token count and model cost to compute survived-lines-per-1k-tokens and survived-lines-per-dollar. The CLI exposes this through:
 
 ```sh
-agent-analyzer patch-survival --repo /path/to/repo --diff patch.diff --tokens 120000 --cost-usd 2.40 --out patch-survival.json
+agent-analyzer patch-survival --repo /path/to/repo --diff patch.diff --tokens 120000 --cost-usd 2.40 --source codex --session-id "$SESSION_ID" --out patch-survival.json
 ```
 
 For paid scans over many agent sessions, write one diff path per line and run the same aggregate analysis in batch mode:
 
 ```sh
-agent-analyzer patch-survival --repo /path/to/repo --diff-list session-diffs.txt --cache-files 1000 --out patch-survival-batch.json
+agent-analyzer patch-survival --repo /path/to/repo --project-cwd "$PWD" --diff-list session-diffs.txt --cache-files 1000 --out patch-survival-batch.json
 ```
 
 Blank lines and `#` comments are ignored in the diff list. Relative paths are resolved from the list file location. Batch mode shares a bounded target-file cache across all diffs, reports `diff_count`, and still emits only aggregate-safe file results.

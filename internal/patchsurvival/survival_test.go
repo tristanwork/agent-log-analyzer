@@ -134,6 +134,65 @@ func TestAnalyzeUnifiedDiffBatchAggregatesMultipleDiffs(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDiffInputsGroupsBySafeContext(t *testing.T) {
+	repo := newGitRepo(t)
+	writeFile(t, repo, "one.txt", "base\nkept one\n")
+	writeFile(t, repo, "two.txt", "base\nkept two\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+
+	projectCWD := filepath.Join(repo, "private", "workspace")
+	inputs := []DiffInput{
+		{
+			Diff: []byte(strings.Join([]string{
+				"diff --git a/one.txt b/one.txt",
+				"@@ -1 +1,2 @@",
+				"+kept one",
+			}, "\n")),
+			Context: Context{
+				ProjectCWD:    projectCWD,
+				SourceHarness: "codex",
+				SessionID:     "session-one-private",
+			},
+		},
+		{
+			Diff: []byte(strings.Join([]string{
+				"diff --git a/two.txt b/two.txt",
+				"@@ -1 +1,2 @@",
+				"+kept two",
+			}, "\n")),
+			Context: Context{
+				ProjectCWD:    projectCWD,
+				SourceHarness: "codex",
+				SessionID:     "session-two-private",
+			},
+		},
+	}
+
+	result, err := AnalyzeDiffInputs(context.Background(), inputs, Options{RepoRoot: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Summary.Groups) != 2 {
+		t.Fatalf("expected one group per session hash, got %#v", result.Summary.Groups)
+	}
+	if result.Summary.Groups[0].ProjectCWDHash == "" || result.Summary.Groups[0].ProjectCWDHash != result.Summary.Groups[1].ProjectCWDHash {
+		t.Fatalf("expected stable project cwd hash across groups: %#v", result.Summary.Groups)
+	}
+	if result.Summary.Groups[0].SessionHash == "" || result.Summary.Groups[0].SessionHash == result.Summary.Groups[1].SessionHash {
+		t.Fatalf("expected distinct session hashes: %#v", result.Summary.Groups)
+	}
+	if result.Summary.Groups[0].SourceHarness != "codex" || result.Summary.Groups[1].SourceHarness != "codex" {
+		t.Fatalf("expected source harness to be retained: %#v", result.Summary.Groups)
+	}
+	if result.Summary.Groups[0].DiffCount != 1 || result.Summary.Groups[0].SurvivedLineCount != 1 {
+		t.Fatalf("unexpected first group counts: %#v", result.Summary.Groups[0])
+	}
+	if strings.Contains(result.Summary.Groups[0].ProjectCWDHash, "workspace") || strings.Contains(result.Summary.Groups[0].SessionHash, "session-one") {
+		t.Fatalf("group hashes leaked raw context: %#v", result.Summary.Groups[0])
+	}
+}
+
 func TestAnalyzeUnifiedDiffCanCompareAgainstSelectedRef(t *testing.T) {
 	repo := newGitRepo(t)
 	writeFile(t, repo, "feature.txt", "base\nsurvived in head\n")

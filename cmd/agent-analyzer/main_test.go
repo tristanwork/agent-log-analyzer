@@ -104,7 +104,9 @@ func TestPatchSurvival_WritesPrivacySafeReport(t *testing.T) {
 	}, "\n"))
 
 	outPath := filepath.Join(dir, "patch-survival.json")
-	if err := runPatchSurvival([]string{"--repo", repo, "--diff", diffPath, "--out", outPath, "--tokens", "1000", "--cost-usd", "0.50"}); err != nil {
+	privateProject := filepath.Join(dir, "private-workspace")
+	privateSession := "session-private-123"
+	if err := runPatchSurvival([]string{"--repo", repo, "--diff", diffPath, "--out", outPath, "--tokens", "1000", "--cost-usd", "0.50", "--project-cwd", privateProject, "--source", "codex", "--session-id", privateSession}); err != nil {
 		t.Fatalf("runPatchSurvival: %v", err)
 	}
 	report := readPatchSurvivalReport(t, outPath)
@@ -122,6 +124,16 @@ func TestPatchSurvival_WritesPrivacySafeReport(t *testing.T) {
 	}
 	if report.Summary.PatchYield == nil || report.Summary.PatchYield.SurvivedLinesPer1KTokens != 1 || report.Summary.PatchYield.SurvivedLinesPerDollar != 2 {
 		t.Fatalf("unexpected patch yield: %#v", report.Summary.PatchYield)
+	}
+	if len(report.Summary.Groups) != 1 {
+		t.Fatalf("expected one context group: %#v", report.Summary.Groups)
+	}
+	group := report.Summary.Groups[0]
+	if group.ProjectCWDHash == "" || group.SessionHash == "" || group.SourceHarness != "codex" {
+		t.Fatalf("unexpected context group: %#v", group)
+	}
+	if strings.Contains(group.ProjectCWDHash, "private-workspace") || strings.Contains(group.SessionHash, "session-private") {
+		t.Fatalf("context group leaked raw metadata: %#v", group)
 	}
 
 	debugOut := filepath.Join(dir, "patch-survival-debug.json")
@@ -183,6 +195,11 @@ func readPatchSurvivalReport(t *testing.T, path string) struct {
 			SurvivedLinesPer1KTokens float64 `json:"survived_lines_per_1k_tokens"`
 			SurvivedLinesPerDollar   float64 `json:"survived_lines_per_dollar"`
 		} `json:"patch_yield"`
+		Groups []struct {
+			ProjectCWDHash string `json:"project_cwd_hash"`
+			SourceHarness  string `json:"source_harness"`
+			SessionHash    string `json:"session_hash"`
+		} `json:"groups"`
 	} `json:"summary"`
 	Files []struct {
 		Path     string `json:"path"`
@@ -203,6 +220,11 @@ func readPatchSurvivalReport(t *testing.T, path string) struct {
 				SurvivedLinesPer1KTokens float64 `json:"survived_lines_per_1k_tokens"`
 				SurvivedLinesPerDollar   float64 `json:"survived_lines_per_dollar"`
 			} `json:"patch_yield"`
+			Groups []struct {
+				ProjectCWDHash string `json:"project_cwd_hash"`
+				SourceHarness  string `json:"source_harness"`
+				SessionHash    string `json:"session_hash"`
+			} `json:"groups"`
 		} `json:"summary"`
 		Files []struct {
 			Path     string `json:"path"`

@@ -94,6 +94,9 @@ func runPatchSurvival(args []string) error {
 	tokens := fs.Int("tokens", 0, "optional total model tokens for patch-yield-per-token")
 	costUSD := fs.Float64("cost-usd", 0, "optional model spend in USD for patch-yield-per-dollar")
 	cacheFiles := fs.Int("cache-files", 1024, "maximum target files to cache during batch analysis")
+	projectCWD := fs.String("project-cwd", "", "optional project/cwd value to hash into report grouping metadata")
+	sourceHarness := fs.String("source", "", "optional source harness ID for report grouping metadata")
+	sessionID := fs.String("session-id", "", "optional session ID to hash into report grouping metadata")
 	debugPaths := fs.Bool("debug-paths", false, "include raw repo-relative paths in local debug output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -135,6 +138,11 @@ func runPatchSurvival(args []string) error {
 		TokenCount:     *tokens,
 		CostUSD:        *costUSD,
 		MaxCachedFiles: *cacheFiles,
+		Context: patchsurvival.Context{
+			ProjectCWD:    *projectCWD,
+			SourceHarness: *sourceHarness,
+			SessionID:     *sessionID,
+		},
 	}
 	var result patchsurvival.Result
 	if *diffListPath != "" {

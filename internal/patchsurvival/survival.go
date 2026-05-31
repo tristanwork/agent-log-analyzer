@@ -33,6 +33,18 @@ type Options struct {
 	TokenCount     int
 	CostUSD        float64
 	MaxCachedFiles int
+	Context        Context
+}
+
+type Context struct {
+	ProjectCWD    string
+	SourceHarness string
+	SessionID     string
+}
+
+type DiffInput struct {
+	Diff    []byte
+	Context Context
 }
 
 type Result struct {
@@ -41,16 +53,32 @@ type Result struct {
 }
 
 type Summary struct {
-	DiffCount         int         `json:"diff_count,omitempty"`
-	FileCount         int         `json:"file_count"`
-	HunkCount         int         `json:"hunk_count"`
-	AddedLineCount    int         `json:"added_line_count"`
-	SurvivedLineCount int         `json:"survived_line_count"`
-	Survived          int         `json:"survived"`
-	Modified          int         `json:"modified"`
-	Reverted          int         `json:"reverted"`
-	Unknown           int         `json:"unknown"`
-	PatchYield        *PatchYield `json:"patch_yield,omitempty"`
+	DiffCount         int            `json:"diff_count,omitempty"`
+	FileCount         int            `json:"file_count"`
+	HunkCount         int            `json:"hunk_count"`
+	AddedLineCount    int            `json:"added_line_count"`
+	SurvivedLineCount int            `json:"survived_line_count"`
+	Survived          int            `json:"survived"`
+	Modified          int            `json:"modified"`
+	Reverted          int            `json:"reverted"`
+	Unknown           int            `json:"unknown"`
+	PatchYield        *PatchYield    `json:"patch_yield,omitempty"`
+	Groups            []GroupSummary `json:"groups,omitempty"`
+}
+
+type GroupSummary struct {
+	ProjectCWDHash    string `json:"project_cwd_hash,omitempty"`
+	SourceHarness     string `json:"source_harness,omitempty"`
+	SessionHash       string `json:"session_hash,omitempty"`
+	DiffCount         int    `json:"diff_count"`
+	FileCount         int    `json:"file_count"`
+	HunkCount         int    `json:"hunk_count"`
+	AddedLineCount    int    `json:"added_line_count"`
+	SurvivedLineCount int    `json:"survived_line_count"`
+	Survived          int    `json:"survived"`
+	Modified          int    `json:"modified"`
+	Reverted          int    `json:"reverted"`
+	Unknown           int    `json:"unknown"`
 }
 
 type PatchYield struct {
@@ -89,54 +117,169 @@ type cachedContent struct {
 }
 
 func AnalyzeUnifiedDiff(ctx context.Context, diff []byte, options Options) (Result, error) {
-	return AnalyzeUnifiedDiffBatch(ctx, [][]byte{diff}, options)
+	return AnalyzeDiffInputs(ctx, []DiffInput{{Diff: diff}}, options)
 }
 
 func AnalyzeUnifiedDiffBatch(ctx context.Context, diffs [][]byte, options Options) (Result, error) {
+	inputs := make([]DiffInput, 0, len(diffs))
+	for _, diff := range diffs {
+		inputs = append(inputs, DiffInput{Diff: diff})
+	}
+	return AnalyzeDiffInputs(ctx, inputs, options)
+}
+
+func AnalyzeDiffInputs(ctx context.Context, inputs []DiffInput, options Options) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if len(diffs) == 0 {
+	if len(inputs) == 0 {
 		return Result{}, errors.New("at least one diff is required")
 	}
 	analyzer, err := newSurvivalAnalyzer(options)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{Files: make([]FileResult, 0, len(diffs))}
-	result.Summary.DiffCount = len(diffs)
-	for index, diff := range diffs {
-		files, err := parseUnifiedDiff(diff)
+	result := Result{Files: make([]FileResult, 0, len(inputs))}
+	result.Summary.DiffCount = len(inputs)
+	groups := make(map[string]*GroupSummary)
+	var groupOrder []string
+	for index, input := range inputs {
+		files, err := parseUnifiedDiff(input.Diff)
 		if err != nil {
 			return Result{}, err
 		}
 		if len(files) == 0 {
-			if len(diffs) == 1 {
+			if len(inputs) == 1 {
 				return Result{}, errors.New("diff contains no file hunks")
 			}
 			return Result{}, fmt.Errorf("diff %d contains no file hunks", index+1)
 		}
+		group := groupForContext(analyzer.options, input.Context, groups, &groupOrder)
+		group.DiffCount++
 		for _, file := range files {
 			fileResult := analyzer.analyzeFile(ctx, file)
 			result.Files = append(result.Files, fileResult)
-			result.Summary.FileCount++
-			result.Summary.HunkCount += fileResult.HunkCount
-			result.Summary.AddedLineCount += fileResult.AddedLineCount
-			result.Summary.SurvivedLineCount += fileResult.SurvivedLineCount
-			switch fileResult.Status {
-			case StatusSurvived:
-				result.Summary.Survived++
-			case StatusModified:
-				result.Summary.Modified++
-			case StatusReverted:
-				result.Summary.Reverted++
-			default:
-				result.Summary.Unknown++
-			}
+			result.Summary.addFileResult(fileResult)
+			group.addFileResult(fileResult)
 		}
 	}
 	result.Summary.PatchYield = computePatchYield(result.Summary.SurvivedLineCount, analyzer.options)
+	for _, key := range groupOrder {
+		result.Summary.Groups = append(result.Summary.Groups, *groups[key])
+	}
 	return result, nil
+}
+
+func (summary *Summary) addFileResult(fileResult FileResult) {
+	summary.FileCount++
+	summary.HunkCount += fileResult.HunkCount
+	summary.AddedLineCount += fileResult.AddedLineCount
+	summary.SurvivedLineCount += fileResult.SurvivedLineCount
+	switch fileResult.Status {
+	case StatusSurvived:
+		summary.Survived++
+	case StatusModified:
+		summary.Modified++
+	case StatusReverted:
+		summary.Reverted++
+	default:
+		summary.Unknown++
+	}
+}
+
+func (summary *GroupSummary) addFileResult(fileResult FileResult) {
+	summary.FileCount++
+	summary.HunkCount += fileResult.HunkCount
+	summary.AddedLineCount += fileResult.AddedLineCount
+	summary.SurvivedLineCount += fileResult.SurvivedLineCount
+	switch fileResult.Status {
+	case StatusSurvived:
+		summary.Survived++
+	case StatusModified:
+		summary.Modified++
+	case StatusReverted:
+		summary.Reverted++
+	default:
+		summary.Unknown++
+	}
+}
+
+func groupForContext(options Options, input Context, groups map[string]*GroupSummary, order *[]string) *GroupSummary {
+	context := mergeContext(options.Context, input)
+	projectHash := hashString(projectCWDForContext(options, context))
+	sourceHarness := safeSourceHarness(context.SourceHarness)
+	sessionHash := hashIfNotEmpty(context.SessionID)
+	key := projectHash + "\x00" + sourceHarness + "\x00" + sessionHash
+	if group, ok := groups[key]; ok {
+		return group
+	}
+	group := &GroupSummary{
+		ProjectCWDHash: projectHash,
+		SourceHarness:  sourceHarness,
+		SessionHash:    sessionHash,
+	}
+	groups[key] = group
+	*order = append(*order, key)
+	return group
+}
+
+func mergeContext(base Context, override Context) Context {
+	if strings.TrimSpace(override.ProjectCWD) != "" {
+		base.ProjectCWD = override.ProjectCWD
+	}
+	if strings.TrimSpace(override.SourceHarness) != "" {
+		base.SourceHarness = override.SourceHarness
+	}
+	if strings.TrimSpace(override.SessionID) != "" {
+		base.SessionID = override.SessionID
+	}
+	return base
+}
+
+func projectCWDForContext(options Options, context Context) string {
+	if cwd := strings.TrimSpace(context.ProjectCWD); cwd != "" {
+		return cwd
+	}
+	if abs, err := filepath.Abs(options.RepoRoot); err == nil {
+		return abs
+	}
+	return options.RepoRoot
+}
+
+func safeSourceHarness(source string) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		return "unknown"
+	}
+	var builder strings.Builder
+	for _, r := range source {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '_' || r == '-' || r == '.':
+			builder.WriteRune(r)
+		case r == ' ' || r == '/' || r == ':':
+			builder.WriteByte('_')
+		}
+		if builder.Len() >= 64 {
+			break
+		}
+	}
+	cleaned := strings.Trim(builder.String(), "_-.")
+	if cleaned == "" {
+		return "unknown"
+	}
+	return cleaned
+}
+
+func hashIfNotEmpty(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return hashString(value)
 }
 
 func newSurvivalAnalyzer(options Options) (*survivalAnalyzer, error) {
@@ -360,6 +503,10 @@ func normalizeLine(line string) string {
 }
 
 func hashPath(path string) string {
-	sum := sha256.Sum256([]byte(path))
+	return hashString(path)
+}
+
+func hashString(value string) string {
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
