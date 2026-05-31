@@ -113,6 +113,11 @@ func TestGenerateCreatesClaudePluginArtifact(t *testing.T) {
 	if !strings.Contains(artifact.Install.Command, "claude plugin install") {
 		t.Fatalf("expected persistent plugin install command, got %s", artifact.Install.Command)
 	}
+	for _, want := range []string{"summarize WAIVER.md", "ask before each install command"} {
+		if !strings.Contains(artifact.Install.ClaudePrompt, want) {
+			t.Fatalf("install prompt missing waiver instruction %q:\n%s", want, artifact.Install.ClaudePrompt)
+		}
+	}
 	readme := fileContent(t, artifact, "README.md")
 	for _, want := range []string{
 		"harnesses/codex/",

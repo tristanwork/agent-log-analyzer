@@ -19,6 +19,8 @@ type reportDeliveryRequest struct {
 	MarketingOptIn    bool   `json:"marketing_opt_in"`
 	SourceReportJobID string `json:"source_report_job_id"`
 	SourceReportToken string `json:"source_report_token"`
+	WaiverAccepted    bool   `json:"waiver_accepted"`
+	Acknowledgment    string `json:"acknowledgment"`
 }
 
 type reportDeliveryResponse struct {
@@ -48,6 +50,10 @@ func createReportDeliveryHandler(store app.APIStore, sender emailSender) http.Ha
 		}
 		if request.SourceReportJobID == "" || request.SourceReportToken == "" {
 			writeErrorOrHTML(w, r, http.StatusBadRequest, "source report is required")
+			return
+		}
+		if !reportDeliveryWaiverAccepted(request) {
+			writeErrorOrHTML(w, r, http.StatusBadRequest, "waiver acknowledgment required")
 			return
 		}
 		job, report, err := authorizedReport(store, request.SourceReportJobID, request.SourceReportToken)
@@ -140,7 +146,13 @@ func parseReportDeliveryRequest(r *http.Request) (reportDeliveryRequest, error) 
 	request.MarketingOptIn = r.Form.Get("marketing_opt_in") == "1" || r.Form.Get("marketing_opt_in") == "true" || r.Form.Get("marketing_opt_in") == "on"
 	request.SourceReportJobID = r.Form.Get("source_report_job_id")
 	request.SourceReportToken = r.Form.Get("source_report_token")
+	request.WaiverAccepted = r.Form.Get("waiver_accepted") == "1" || r.Form.Get("waiver_accepted") == "true" || r.Form.Get("waiver_accepted") == "on"
+	request.Acknowledgment = r.Form.Get("acknowledgment")
 	return request, nil
+}
+
+func reportDeliveryWaiverAccepted(request reportDeliveryRequest) bool {
+	return request.WaiverAccepted && strings.Contains(strings.ToLower(request.Acknowledgment), "own risk")
 }
 
 func authorizedReport(store app.APIStore, jobID, reportToken string) (app.Job, analyzer.Report, error) {
@@ -167,7 +179,7 @@ func renderReportDeliverySentPage(w http.ResponseWriter, email, reportURL, artif
 claude plugin install "$PLUGIN_ZIP"`
 	escapedCommand := htmlstd.EscapeString(command)
 	body := fmt.Sprintf(
-		`<p>We recorded <strong>%s</strong> and sent the free report pack and custom plugin links to that address.</p><p class="download-button-row"><a class="plugin-cta" href="%s">Download report pack</a><a class="plugin-cta" href="%s">Download custom plugin</a></p><p>The email also reminds you about the Spec Kitty training voucher and links to the <a href="https://github.com/Priivacy-ai/spec-kitty" rel="noopener noreferrer">Spec Kitty GitHub repo</a>.</p><p>Choose your harness in <strong>INSTALL.md</strong> inside the plugin zip. For Claude Code, install it persistently, then run <strong>/agent-analyzer-status</strong> so you can see it working:</p><div class="simple-command-copy"><pre><code>%s</code></pre><button type="button" class="copy-agents-line" data-copy="%s">Copy command</button></div><p>Use <strong>claude --plugin-dir "$PLUGIN_ZIP"</strong> only for a one-session preview. For other harnesses, use the matching folder instead of installing the Claude Code plugin: Codex uses <strong>harnesses/codex/</strong>, OpenCode uses <strong>harnesses/opencode/</strong>, Cursor uses <strong>harnesses/cursor/</strong>, Kiro uses <strong>harnesses/kiro/</strong>, Antigravity uses <strong>harnesses/antigravity/</strong>, and Claude Desktop MCP uses <strong>harnesses/claude-desktop-mcp/</strong>. Claude Desktop local/session logs are analyzed automatically; Desktop remediation currently uses the MCP/connector guidance. The plugin was generated from sanitized report JSON only. Raw transcripts were not attached or uploaded.</p>`,
+		`<p>We recorded <strong>%s</strong> and the waiver acknowledgment, then sent the free report pack and custom plugin links to that address.</p><p class="download-button-row"><a class="plugin-cta" href="%s">Download report pack</a><a class="plugin-cta" href="%s">Download custom plugin</a></p><p>The email also reminds you about the Spec Kitty training voucher and links to the <a href="https://github.com/Priivacy-ai/spec-kitty" rel="noopener noreferrer">Spec Kitty GitHub repo</a>.</p><p>Choose your harness in <strong>INSTALL.md</strong> inside the plugin zip. For Claude Code, ask Claude to summarize WAIVER.md, ask before each install command, install it persistently, then run <strong>/agent-analyzer-status</strong> so you can see it working:</p><div class="simple-command-copy"><pre><code>%s</code></pre><button type="button" class="copy-agents-line" data-copy="%s">Copy command</button></div><p>Use <strong>claude --plugin-dir "$PLUGIN_ZIP"</strong> only for a one-session preview. For other harnesses, use the matching folder instead of installing the Claude Code plugin: Codex uses <strong>harnesses/codex/</strong>, OpenCode uses <strong>harnesses/opencode/</strong>, Cursor uses <strong>harnesses/cursor/</strong>, Kiro uses <strong>harnesses/kiro/</strong>, Antigravity uses <strong>harnesses/antigravity/</strong>, and Claude Desktop MCP uses <strong>harnesses/claude-desktop-mcp/</strong>. Claude Desktop local/session logs are analyzed automatically; Desktop remediation currently uses the MCP/connector guidance. The plugin was generated from sanitized report JSON only. Raw transcripts were not attached or uploaded.</p>`,
 		htmlstd.EscapeString(email),
 		htmlstd.EscapeString(reportURL),
 		htmlstd.EscapeString(artifactURL),
@@ -199,13 +211,14 @@ Choose your harness:
 
 Claude Code:
 1. Save agent-analyzer-optimization-plugin.zip somewhere local.
-2. Install it persistently:
+2. Ask Claude Code to summarize WAIVER.md and confirm the risk boundary.
+3. Install it persistently, and ask before each install command:
 
    PLUGIN_ZIP="/path/to/agent-analyzer-optimization-plugin.zip"
    claude plugin install "$PLUGIN_ZIP"
 
-3. Open Claude Code and run /agent-analyzer-status so you can see the custom guidance is active.
-4. Ask Claude Code to explain what the plugin installs before approving any recommended tool setup.
+4. Open Claude Code and run /agent-analyzer-status so you can see the custom guidance is active.
+5. Ask Claude Code to explain what the plugin installs before approving any recommended tool setup.
 
 Temporary preview only:
 - claude --plugin-dir "$PLUGIN_ZIP"

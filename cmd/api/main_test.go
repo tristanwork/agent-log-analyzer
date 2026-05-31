@@ -220,7 +220,7 @@ func TestReportDeliveryEmailsReportPackAndPluginAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender := &captureEmailSender{}
-	body := `{"email":"Dev@Example.com","marketing_opt_in":true,"source_report_job_id":"job-source-1234","source_report_token":"source-token"}`
+	body := `{"email":"Dev@Example.com","marketing_opt_in":true,"source_report_job_id":"job-source-1234","source_report_token":"source-token","waiver_accepted":true,"acknowledgment":"I accept at my own risk"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/report-deliveries", strings.NewReader(body))
 	req.Host = "example.test"
 	req.Header.Set("Content-Type", "application/json")
@@ -256,6 +256,8 @@ func TestReportDeliveryEmailsReportPackAndPluginAttachments(t *testing.T) {
 		!strings.Contains(message.Body, "Spec Kitty training voucher") ||
 		!strings.Contains(message.Body, "https://github.com/Priivacy-ai/spec-kitty") ||
 		!strings.Contains(message.Body, "Choose your harness") ||
+		!strings.Contains(message.Body, "summarize WAIVER.md") ||
+		!strings.Contains(message.Body, "ask before each install command") ||
 		!strings.Contains(message.Body, "claude plugin install") ||
 		!strings.Contains(message.Body, "/agent-analyzer-status") ||
 		!strings.Contains(message.Body, "harnesses/codex/AGENTS-snippet.md") ||
@@ -273,6 +275,37 @@ func TestReportDeliveryEmailsReportPackAndPluginAttachments(t *testing.T) {
 		if attachment.ContentType != "application/zip" || !bytes.HasPrefix(attachment.Data, []byte("PK")) {
 			t.Fatalf("attachment %s is not a zip: type=%q len=%d", attachment.Filename, attachment.ContentType, len(attachment.Data))
 		}
+	}
+}
+
+func TestReportDeliveryRequiresWaiverAcknowledgment(t *testing.T) {
+	store, err := localstore.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := analyzer.Report{JobID: "job-source-1234", Version: analyzer.Version}
+	sourceJob := app.Job{
+		ID:              "job-source-1234",
+		Status:          app.StatusCompleted,
+		ScanType:        app.ScanTypeSingle,
+		ReportTokenHash: tokenHash("source-token"),
+	}
+	if err := store.CreateCompletedReport(sourceJob, report); err != nil {
+		t.Fatal(err)
+	}
+	sender := &captureEmailSender{}
+	body := `{"email":"dev@example.com","source_report_job_id":"job-source-1234","source_report_token":"source-token"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/report-deliveries", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	createReportDeliveryHandler(store, sender).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing waiver status 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("waiver failure must not send email, got %#v", sender.messages)
 	}
 }
 
@@ -788,6 +821,9 @@ func TestReportPageServerRendersCompletedReport(t *testing.T) {
 		"Download the report pack and your custom plugin for free",
 		"Email required: enter it once to unlock both downloads and receive the links.",
 		"Email for report pack + generated plugin",
+		"name=\"waiver_accepted\"",
+		"data-waiver-gated-submit disabled",
+		"with my approval and at my own risk",
 		"upcoming Spec Kitty Teamspace launch",
 		"Unlock my custom plugin",
 		"0 model tokens used to generate this report.",
@@ -865,6 +901,8 @@ func TestReportPageRendersRealReportFixtures(t *testing.T) {
 			for _, want := range append(tc.wantLabels,
 				"Download report pack",
 				"Email for report pack + generated plugin",
+				"name=\"waiver_accepted\"",
+				"data-waiver-gated-submit disabled",
 				"Unlock my custom plugin",
 				"Security Receipt",
 				"Raw log TTL: not uploaded",

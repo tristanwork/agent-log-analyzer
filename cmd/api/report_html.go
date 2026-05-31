@@ -282,18 +282,23 @@ var reportHTMLTemplate = template.Must(template.New("report").Funcs(template.Fun
           </ul>
           </div>
           <div class="upsell-action" id="plugin-purchase">
-          <form class="email-unlock-form" action="/api/report-deliveries" method="post">
+          <form class="email-unlock-form" action="/api/report-deliveries" method="post" data-waiver-gated-form>
             <input type="hidden" name="source_report_job_id" value="{{.Job.ID}}" />
             <input type="hidden" name="source_report_token" value="{{.ReportToken}}" />
+            <input type="hidden" name="acknowledgment" value="I understand that Agent Analyzer provides deterministic analysis and vetted setup recommendations, but any installation or code change is executed by Claude Code, my package manager, or third-party tools with my approval and at my own risk." />
             <label>Email for report pack + generated plugin
               <input type="email" name="email" placeholder="you@example.com" required />
+            </label>
+            <label class="checkbox-row waiver-ack">
+              <input type="checkbox" name="waiver_accepted" value="true" required data-waiver-checkbox />
+              <span>I understand that Agent Analyzer provides deterministic analysis and vetted setup recommendations, but any installation or code change is executed by Claude Code, my package manager, or third-party tools with my approval and at my own risk.</span>
             </label>
             <label class="checkbox-row">
               <input type="checkbox" name="marketing_opt_in" value="1" />
               <span>Send me occasional updates about the upcoming Spec Kitty Teamspace launch and agentic coding training.</span>
             </label>
-            <button class="plugin-cta" type="submit">Unlock my custom plugin</button>
-            <p class="command-note">The report pack and generated plugin are free. After submit, this page shows both download buttons and emails the links, the Spec Kitty training voucher reminder, and the Spec Kitty GitHub repo. Raw transcripts are not attached or uploaded.</p>
+            <button class="plugin-cta" type="submit" data-waiver-gated-submit disabled>Unlock my custom plugin</button>
+            <p class="command-note">The report pack and generated plugin are free. After submit, this page shows both download buttons and emails the links, the Spec Kitty training voucher reminder, and the Spec Kitty GitHub repo. Install commands and plugin links unlock after this acknowledgment. Raw transcripts are not attached or uploaded.</p>
           </form>
           </div>
         </div>

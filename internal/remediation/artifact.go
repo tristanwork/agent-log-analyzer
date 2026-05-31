@@ -956,7 +956,7 @@ func installInstructions(pluginName, artifactURL string) Install {
 		`curl -fsS "$PLUGIN_URL" -o "$PLUGIN_ZIP"`,
 		`claude plugin install "$PLUGIN_ZIP"`,
 	}, "\n")
-	prompt := "Install the generated Agent Analyzer optimization plugin persistently. Run the command below, explain what it installs, and ask for approval before executing it. After install, run /agent-analyzer-status so the user sees the active guidance. Do not print plugin archive contents.\n\n```sh\n" + command + "\n```"
+	prompt := "Install the generated Agent Analyzer optimization plugin persistently. First open and summarize WAIVER.md, confirm the user accepts the risk boundary, then ask before each install command. Run the command below only after that approval. After install, run /agent-analyzer-status so the user sees the active guidance. Do not print plugin archive contents.\n\n```sh\n" + command + "\n```"
 	return Install{
 		Command:          command,
 		ClaudePrompt:     prompt,

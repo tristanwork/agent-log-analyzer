@@ -420,18 +420,23 @@
             </ul>
           </div>
           <div class="upsell-action" id="plugin-purchase">
-            <form class="email-unlock-form" action="/api/report-deliveries" method="post">
+            <form class="email-unlock-form" action="/api/report-deliveries" method="post" data-waiver-gated-form>
               <input type="hidden" name="source_report_job_id" value="" />
               <input type="hidden" name="source_report_token" value="" />
+              <input type="hidden" name="acknowledgment" value="I understand that Agent Analyzer provides deterministic analysis and vetted setup recommendations, but any installation or code change is executed by Claude Code, my package manager, or third-party tools with my approval and at my own risk." />
               <label>Email for report + plugin attachments
                 <input type="email" name="email" placeholder="you@example.com" required />
+              </label>
+              <label class="checkbox-row waiver-ack">
+                <input type="checkbox" name="waiver_accepted" value="true" required data-waiver-checkbox />
+                <span>I understand that Agent Analyzer provides deterministic analysis and vetted setup recommendations, but any installation or code change is executed by Claude Code, my package manager, or third-party tools with my approval and at my own risk.</span>
               </label>
               <label class="checkbox-row">
                 <input type="checkbox" name="marketing_opt_in" value="1" />
                 <span>Send me occasional updates about the upcoming Spec Kitty Teamspace launch and agentic coding training.</span>
               </label>
-              <button class="plugin-cta" type="submit">Email me the report + plugin</button>
-              <p class="command-note">We send the branded report pack and generated plugin zip to this address. The email also includes install instructions. Raw transcripts are not attached or uploaded.</p>
+              <button class="plugin-cta" type="submit" data-waiver-gated-submit disabled>Email me the report + plugin</button>
+              <p class="command-note">We send the branded report pack and generated plugin zip to this address after the waiver acknowledgment. The email also includes install instructions. Raw transcripts are not attached or uploaded.</p>
             </form>
           </div>
         </div>

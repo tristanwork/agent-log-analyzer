@@ -34,6 +34,22 @@ copyPromptButtons.forEach((button) => {
 });
 copyPaidCommandButton?.addEventListener("click", () => copyText(paidCommand.textContent, copyPaidCommandButton));
 
+document.querySelectorAll("[data-waiver-gated-form]").forEach((form) => {
+  const checkbox = form.querySelector("[data-waiver-checkbox]");
+  const submit = form.querySelector("[data-waiver-gated-submit]");
+  const syncSubmit = () => {
+    if (submit) submit.disabled = !checkbox?.checked;
+  };
+  checkbox?.addEventListener("change", syncSubmit);
+  form.addEventListener("submit", (event) => {
+    if (checkbox && !checkbox.checked) {
+      event.preventDefault();
+      checkbox.focus();
+    }
+  });
+  syncSubmit();
+});
+
 unlockPaidButton?.addEventListener("click", async () => {
   unlockPaidButton.disabled = true;
   paidStatus.textContent = "creating waiver-gated paid scan commands";
