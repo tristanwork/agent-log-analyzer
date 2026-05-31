@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -90,6 +91,98 @@ func writeLogContent(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write sample log: %v", err)
 	}
+}
+
+func TestPatchSurvival_WritesPrivacySafeReport(t *testing.T) {
+	dir := t.TempDir()
+	repo := newPatchSurvivalFixtureRepo(t, dir)
+	diffPath := filepath.Join(dir, "patch.diff")
+	writeLogContent(t, diffPath, strings.Join([]string{
+		"diff --git a/feature.txt b/feature.txt",
+		"@@ -1 +1,2 @@",
+		"+added line",
+	}, "\n"))
+
+	outPath := filepath.Join(dir, "patch-survival.json")
+	if err := runPatchSurvival([]string{"--repo", repo, "--diff", diffPath, "--out", outPath}); err != nil {
+		t.Fatalf("runPatchSurvival: %v", err)
+	}
+	report := readPatchSurvivalReport(t, outPath)
+	if report.Summary.Survived != 1 || report.Summary.FileCount != 1 {
+		t.Fatalf("unexpected summary: %#v", report.Summary)
+	}
+	if len(report.Files) != 1 {
+		t.Fatalf("expected one file result, got %#v", report.Files)
+	}
+	if report.Files[0].Path != "" {
+		t.Fatalf("raw path should be hidden by default: %#v", report.Files[0])
+	}
+	if report.Files[0].PathHash == "" {
+		t.Fatalf("expected path hash: %#v", report.Files[0])
+	}
+
+	debugOut := filepath.Join(dir, "patch-survival-debug.json")
+	if err := runPatchSurvival([]string{"--repo", repo, "--diff", diffPath, "--out", debugOut, "--debug-paths"}); err != nil {
+		t.Fatalf("runPatchSurvival debug: %v", err)
+	}
+	debugReport := readPatchSurvivalReport(t, debugOut)
+	if len(debugReport.Files) != 1 || debugReport.Files[0].Path != "feature.txt" {
+		t.Fatalf("expected explicit local path exposure, got %#v", debugReport.Files)
+	}
+}
+
+func newPatchSurvivalFixtureRepo(t *testing.T, root string) string {
+	t.Helper()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runPatchSurvivalGit(t, repo, "init")
+	runPatchSurvivalGit(t, repo, "config", "user.email", "test@example.com")
+	runPatchSurvivalGit(t, repo, "config", "user.name", "Test User")
+	writeLogContent(t, filepath.Join(repo, "feature.txt"), "base\nadded line\n")
+	runPatchSurvivalGit(t, repo, "add", ".")
+	runPatchSurvivalGit(t, repo, "commit", "-m", "fixture")
+	return repo
+}
+
+func runPatchSurvivalGit(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+}
+
+func readPatchSurvivalReport(t *testing.T, path string) struct {
+	Summary struct {
+		FileCount int `json:"file_count"`
+		Survived  int `json:"survived"`
+	} `json:"summary"`
+	Files []struct {
+		Path     string `json:"path"`
+		PathHash string `json:"path_hash"`
+	} `json:"files"`
+} {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read patch survival report: %v", err)
+	}
+	var report struct {
+		Summary struct {
+			FileCount int `json:"file_count"`
+			Survived  int `json:"survived"`
+		} `json:"summary"`
+		Files []struct {
+			Path     string `json:"path"`
+			PathHash string `json:"path_hash"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal patch survival report: %v", err)
+	}
+	return report
 }
 
 func snapshotDirEntries(t *testing.T, dir string) []string {

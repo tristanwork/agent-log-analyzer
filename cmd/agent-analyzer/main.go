@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -26,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/priivacy-ai/agent-log-analyzer/internal/analyzer"
+	"github.com/priivacy-ai/agent-log-analyzer/internal/patchsurvival"
 	_ "modernc.org/sqlite"
 )
 
@@ -67,6 +69,8 @@ func run(args []string) error {
 		return runOneShot(args[1:])
 	case "analyze":
 		return runAnalyze(args[1:])
+	case "patch-survival":
+		return runPatchSurvival(args[1:])
 	case "full-scan":
 		return runFullScan(args[1:])
 	case "upload":
@@ -78,6 +82,65 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runPatchSurvival(args []string) error {
+	fs := flag.NewFlagSet("patch-survival", flag.ContinueOnError)
+	repo := fs.String("repo", ".", "path to the repository root to inspect")
+	diffPath := fs.String("diff", "", "path to a unified diff file")
+	out := fs.String("out", "patch-survival.json", "path to write patch survival JSON")
+	ref := fs.String("ref", "", "optional git ref to inspect instead of the working tree")
+	debugPaths := fs.Bool("debug-paths", false, "include raw repo-relative paths in local debug output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	positional := fs.Args()
+	if *diffPath != "" && len(positional) > 0 {
+		return errors.New("agent-analyzer patch-survival: cannot combine --diff with positional diff path")
+	}
+	if *diffPath == "" && len(positional) == 1 {
+		*diffPath = positional[0]
+	}
+	if len(positional) > 1 {
+		return fmt.Errorf("agent-analyzer patch-survival: unexpected extra argument %q", positional[1])
+	}
+	if *diffPath == "" {
+		return errors.New("agent-analyzer patch-survival: --diff or a positional diff path is required")
+	}
+
+	repoRoot, err := filepath.Abs(*repo)
+	if err != nil {
+		return err
+	}
+	diff, err := os.ReadFile(*diffPath)
+	if err != nil {
+		return err
+	}
+	result, err := patchsurvival.AnalyzeUnifiedDiff(context.Background(), diff, patchsurvival.Options{
+		RepoRoot:    repoRoot,
+		Ref:         *ref,
+		ExposePaths: *debugPaths,
+	})
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, append(encoded, '\n'), 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Patch survival report written: %s\n", *out)
+	fmt.Printf("Files: %d, hunks: %d, survived: %d, modified: %d, reverted: %d, unknown: %d\n",
+		result.Summary.FileCount,
+		result.Summary.HunkCount,
+		result.Summary.Survived,
+		result.Summary.Modified,
+		result.Summary.Reverted,
+		result.Summary.Unknown,
+	)
+	return nil
 }
 
 // defaultSupportedLogsFn and recentSupportedLogsFn are package-level
@@ -2916,6 +2979,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --out <path>   output path for the sanitized report JSON (default: ./agent-analyzer-report.json).")
 	fmt.Fprintln(os.Stderr, "  --paid         legacy alias: analyze target-sized recent supported logs locally and write a sanitized aggregate report.")
 	fmt.Fprintf(os.Stderr, "  --limit <n>    maximum recent logs per source for aggregate modes, capped at %d (default: %d).\n", maxAutoLogLimit, defaultAutoLogLimit)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  agent-analyzer patch-survival [--repo <repo>] [--diff <patch.diff>] [--out <path>] [--ref <git-ref>] [--debug-paths]")
+	fmt.Fprintln(os.Stderr, "                 write aggregate-safe patch survival JSON from a unified diff.")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  agent-analyzer upload <sanitized-report.json> [--base-url https://analyzer.spec-kitty.ai]")
 	fmt.Fprintln(os.Stderr, "  agent-analyzer version")
