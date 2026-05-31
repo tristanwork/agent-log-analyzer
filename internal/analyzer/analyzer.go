@@ -128,6 +128,9 @@ func parseLines(input []byte) ([]parsedLine, string) {
 			if firstJSONBoolByKey(obj, "is_error") {
 				line.IsError = true
 			}
+			if firstJSONBoolByKey(obj, "error") {
+				line.IsError = true
+			}
 		}
 		lower := strings.ToLower(line.Text)
 		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "traceback") {

@@ -1294,6 +1294,12 @@ func acceptClaudeDesktopSession(path string, _ os.FileInfo) bool {
 	if base == "audit.jsonl" {
 		return true
 	}
+	normalized := strings.ToLower(filepath.ToSlash(path))
+	ext := strings.ToLower(filepath.Ext(base))
+	if (strings.Contains(normalized, "/local-agent-mode-sessions/") || strings.Contains(normalized, "/claude-code-sessions/")) &&
+		(ext == ".json" || ext == ".jsonl") {
+		return true
+	}
 	return strings.HasPrefix(base, "local_") && strings.EqualFold(filepath.Ext(base), ".json")
 }
 
@@ -1338,14 +1344,14 @@ func claudeConfigDir() string {
 }
 
 func codexSessionRoots() []string {
-	root := os.Getenv("CODEX_HOME")
-	if root == "" {
-		root = filepath.Join(homeDir(), ".codex")
+	var roots []string
+	for _, root := range codexDataRoots() {
+		roots = append(roots,
+			filepath.Join(root, "sessions"),
+			filepath.Join(root, "archived_sessions"),
+		)
 	}
-	return []string{
-		filepath.Join(root, "sessions"),
-		filepath.Join(root, "archived_sessions"),
-	}
+	return roots
 }
 
 func codexHomeDir() string {
@@ -1353,6 +1359,28 @@ func codexHomeDir() string {
 		return root
 	}
 	return filepath.Join(homeDir(), ".codex")
+}
+
+func codexDataRoots() []string {
+	seen := map[string]bool{}
+	var roots []string
+	add := func(root string) {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			return
+		}
+		clean := filepath.Clean(root)
+		if seen[clean] {
+			return
+		}
+		seen[clean] = true
+		roots = append(roots, clean)
+	}
+	add(codexHomeDir())
+	for _, app := range []string{"Codex", "OpenAI Codex", "Codex Desktop"} {
+		add(appSupportDir(app))
+	}
+	return roots
 }
 
 func copilotHomeDir() string {
@@ -1652,42 +1680,44 @@ func recentCodexLogs(limit int, maxBytes int64, minBytes int64) ([]logCandidate,
 }
 
 func recentCodexIndexedSessions(limit int, maxBytes int64, minBytes int64) ([]logCandidate, error) {
-	indexPath := filepath.Join(codexHomeDir(), "session_index.jsonl")
-	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || isPermissionError(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	var matches []logMatch
 	seen := map[string]bool{}
-	for scanner.Scan() {
-		var obj map[string]any
-		if json.Unmarshal(bytes.TrimSpace(scanner.Bytes()), &obj) != nil {
-			continue
+	for _, root := range codexDataRoots() {
+		indexPath := filepath.Join(root, "session_index.jsonl")
+		data, err := os.ReadFile(indexPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || isPermissionError(err) {
+				continue
+			}
+			return nil, err
 		}
-		path := codexSessionPathFromIndex(obj)
-		if path == "" || seen[path] {
-			continue
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+		for scanner.Scan() {
+			var obj map[string]any
+			if json.Unmarshal(bytes.TrimSpace(scanner.Bytes()), &obj) != nil {
+				continue
+			}
+			path := codexSessionPathFromIndex(obj, root)
+			if path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			info, err := os.Stat(path)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			if maxBytes > 0 && info.Size() > maxBytes {
+				continue
+			}
+			if minBytes > 0 && info.Size() < minBytes {
+				continue
+			}
+			matches = append(matches, logMatch{path: path, modTime: info.ModTime(), size: info.Size()})
 		}
-		seen[path] = true
-		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			continue
+		if err := scanner.Err(); err != nil {
+			return nil, err
 		}
-		if maxBytes > 0 && info.Size() > maxBytes {
-			continue
-		}
-		if minBytes > 0 && info.Size() < minBytes {
-			continue
-		}
-		matches = append(matches, logMatch{path: path, modTime: info.ModTime(), size: info.Size()})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	if len(matches) == 0 {
 		return nil, nil
@@ -1706,10 +1736,10 @@ func recentCodexIndexedSessions(limit int, maxBytes int64, minBytes int64) ([]lo
 	return candidates, nil
 }
 
-func codexSessionPathFromIndex(obj map[string]any) string {
+func codexSessionPathFromIndex(obj map[string]any, baseDir string) string {
 	for _, key := range []string{"path", "session_path", "log_path", "file", "filepath", "filename"} {
 		if value, ok := obj[key].(string); ok {
-			if path := resolveCodexJSONLPath(value); path != "" {
+			if path := resolveCodexJSONLPath(value, baseDir); path != "" {
 				return path
 			}
 		}
@@ -1722,7 +1752,7 @@ func codexSessionPathFromIndex(obj map[string]any) string {
 		}
 		switch typed := value.(type) {
 		case string:
-			found = resolveCodexJSONLPath(typed)
+			found = resolveCodexJSONLPath(typed, baseDir)
 		case []any:
 			for _, item := range typed {
 				walk(item)
@@ -1737,7 +1767,7 @@ func codexSessionPathFromIndex(obj map[string]any) string {
 	return found
 }
 
-func resolveCodexJSONLPath(value string) string {
+func resolveCodexJSONLPath(value string, baseDir string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || !strings.HasSuffix(strings.ToLower(value), ".jsonl") {
 		return ""
@@ -1745,7 +1775,10 @@ func resolveCodexJSONLPath(value string) string {
 	if filepath.IsAbs(value) {
 		return filepath.Clean(value)
 	}
-	return filepath.Join(codexHomeDir(), value)
+	if baseDir == "" {
+		baseDir = codexHomeDir()
+	}
+	return filepath.Join(baseDir, value)
 }
 
 func claudeDesktopLogRoots() []string {
@@ -1850,42 +1883,48 @@ func recentSQLiteSourceLogs(limit int, maxBytes int64, minBytes int64) ([]logCan
 }
 
 func recentCodexSQLiteLogs(limit int, maxBytes int64, minBytes int64) ([]logCandidate, error) {
-	root := codexHomeDir()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || isPermissionError(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
 	var matches []logMatch
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := strings.ToLower(entry.Name())
-		if !strings.HasPrefix(name, "logs") || !strings.HasSuffix(name, ".sqlite") {
-			continue
-		}
-		path := filepath.Join(root, entry.Name())
-		info, err := entry.Info()
+	seen := map[string]bool{}
+	for _, root := range codexDataRoots() {
+		entries, err := os.ReadDir(root)
 		if err != nil {
-			if isSkippableDiscoveryError(err) {
+			if errors.Is(err, os.ErrNotExist) || isPermissionError(err) {
 				continue
 			}
 			return nil, err
 		}
-		storeSize, err := sqliteStoreSize(path)
-		if err != nil {
-			continue
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			if !strings.HasPrefix(name, "logs") || !strings.HasSuffix(name, ".sqlite") {
+				continue
+			}
+			path := filepath.Join(root, entry.Name())
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			info, err := entry.Info()
+			if err != nil {
+				if isSkippableDiscoveryError(err) {
+					continue
+				}
+				return nil, err
+			}
+			storeSize, err := sqliteStoreSize(path)
+			if err != nil {
+				continue
+			}
+			if maxBytes > 0 && storeSize > maxBytes {
+				continue
+			}
+			if minBytes > 0 && storeSize < minBytes {
+				continue
+			}
+			matches = append(matches, logMatch{path: path, modTime: info.ModTime(), size: storeSize})
 		}
-		if maxBytes > 0 && storeSize > maxBytes {
-			continue
-		}
-		if minBytes > 0 && storeSize < minBytes {
-			continue
-		}
-		matches = append(matches, logMatch{path: path, modTime: info.ModTime(), size: storeSize})
 	}
 	if len(matches) == 0 {
 		return nil, nil
@@ -2221,7 +2260,11 @@ func readSQLiteStateAsJSONL(path string, keyPrefixes []string, maxOutputBytes in
 }
 
 func sqliteReadOnlyDSN(path string) string {
-	uri := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	slashPath := filepath.ToSlash(path)
+	if len(slashPath) >= 2 && slashPath[1] == ':' {
+		slashPath = "/" + slashPath
+	}
+	uri := url.URL{Scheme: "file", Path: slashPath}
 	query := url.Values{}
 	query.Set("mode", "ro")
 	query.Set("_pragma", "query_only(1)")

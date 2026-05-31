@@ -656,6 +656,22 @@ func TestRecentCodexLogs_PrefersSessionIndex(t *testing.T) {
 	}
 }
 
+func TestRecentCodexLogs_DiscoversAppSupportSessionIndex(t *testing.T) {
+	isolatedDiscoveryHome(t)
+	codexApp := appSupportDir("Codex")
+	indexed := filepath.Join(codexApp, "sessions", "2026", "05", "31", "desktop-indexed.jsonl")
+	writeMeaningfulLog(t, indexed)
+	writeLogContent(t, filepath.Join(codexApp, "session_index.jsonl"), `{"session_path":"sessions/2026/05/31/desktop-indexed.jsonl","cwd":"/Users/private/repo"}`+"\n")
+
+	candidates, err := recentCodexLogs(1, 0, 1)
+	if err != nil {
+		t.Fatalf("recentCodexLogs: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Display != indexed {
+		t.Fatalf("expected app-support indexed Codex candidate, got %#v", candidates)
+	}
+}
+
 func TestRecentClaudeDesktopLogs_DiscoversSessionAndAudit(t *testing.T) {
 	isolatedDiscoveryHome(t)
 	sessionPath := filepath.Join(appSupportDir("Claude"), "local-agent-mode-sessions", "org", "workspace", "local_session.json")
@@ -679,6 +695,20 @@ func TestRecentClaudeDesktopLogs_DiscoversSessionAndAudit(t *testing.T) {
 	}
 }
 
+func TestRecentClaudeDesktopLogs_DiscoversSessionNamedJSON(t *testing.T) {
+	isolatedDiscoveryHome(t)
+	sessionPath := filepath.Join(appSupportDir("Claude"), "claude-code-sessions", "org", "workspace", "session-abc123.json")
+	writeLogContent(t, sessionPath, strings.Repeat(`{"initialMessage":"fix private@example.com","history":[{"hook_event_name":"PreToolUse","tool_name":"Bash"}]}`+"\n", 80))
+
+	candidates, err := recentPathLogs("claude_desktop", "Claude Desktop", claudeDesktopSessionRoots(), acceptClaudeDesktopSession, 10, 0, 1)
+	if err != nil {
+		t.Fatalf("recentPathLogs: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Display != sessionPath {
+		t.Fatalf("expected session-named Claude Desktop JSON candidate, got %#v", candidates)
+	}
+}
+
 func TestRecentCodexSQLiteLogs_ReadsDiagnosticsWithoutSourceWrites(t *testing.T) {
 	home := isolatedDiscoveryHome(t)
 	codexHome := filepath.Join(home, "codex-home")
@@ -699,6 +729,9 @@ func TestRecentCodexSQLiteLogs_ReadsDiagnosticsWithoutSourceWrites(t *testing.T)
 	if err != nil {
 		t.Fatalf("read Codex SQLite: %v", err)
 	}
+	if !strings.Contains(string(data), `"kind":"codex_diagnostic"`) {
+		t.Fatalf("expected Codex diagnostic rows, got %s", data)
+	}
 	afterEntries := snapshotDirEntries(t, filepath.Dir(dbPath))
 	if !reflect.DeepEqual(beforeEntries, afterEntries) {
 		t.Fatalf("Codex SQLite read changed source directory entries: before=%#v after=%#v", beforeEntries, afterEntries)
@@ -708,6 +741,35 @@ func TestRecentCodexSQLiteLogs_ReadsDiagnosticsWithoutSourceWrites(t *testing.T)
 		t.Fatalf("Codex SQLite read changed source file mtimes: before=%#v after=%#v", beforeModTimes, afterModTimes)
 	}
 	report, err := analyzer.AnalyzeForSource("codex-sqlite-test", "codex", data)
+	if err != nil {
+		t.Fatalf("AnalyzeForSource: %v", err)
+	}
+	if report.Metrics.FailedCommands == 0 {
+		t.Fatalf("expected diagnostic error signal, got %#v", report.Metrics)
+	}
+	assertReportDoesNotContain(t, report, "/Users/private/repo", "sk-test-secret")
+}
+
+func TestRecentCodexSQLiteLogs_DiscoversAppSupportDiagnostics(t *testing.T) {
+	isolatedDiscoveryHome(t)
+	dbPath := filepath.Join(appSupportDir("Codex"), "logs.sqlite")
+	writeCodexLogsDB(t, dbPath)
+
+	candidates, err := recentCodexSQLiteLogs(1, 0, 1)
+	if err != nil {
+		t.Fatalf("recentCodexSQLiteLogs: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Display != dbPath {
+		t.Fatalf("expected app-support Codex SQLite candidate, got %#v", candidates)
+	}
+	data, err := candidates[0].readBytes()
+	if err != nil {
+		t.Fatalf("read Codex SQLite: %v", err)
+	}
+	if !strings.Contains(string(data), `"kind":"codex_diagnostic"`) {
+		t.Fatalf("expected Codex diagnostic rows, got %s", data)
+	}
+	report, err := analyzer.AnalyzeForSource("codex-app-sqlite-test", "codex", data)
 	if err != nil {
 		t.Fatalf("AnalyzeForSource: %v", err)
 	}
