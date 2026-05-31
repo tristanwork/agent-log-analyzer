@@ -630,6 +630,148 @@ func TestGenerateAttachesRecommendation(t *testing.T) {
 	})
 }
 
+func TestGeneratePaidPackProfilePersonalizesWithoutPrivateNames(t *testing.T) {
+	report := analyzer.Report{
+		Version: "0.1.0",
+		Ecosystem: analyzer.Ecosystem{
+			ToolingUtilization: analyzer.ToolingUtilization{
+				MCP: analyzer.MCPUtilization{
+					KnownServerIDs:           []string{"github", "private_mcp_acme"},
+					UnknownServerCount:       2,
+					ServerCountBucket:        "3_5",
+					ExposedToolCountBucket:   "20_50",
+					ContextTokenBucket:       "10k_25k",
+					ExposureKnown:            true,
+					CallCount:                7,
+					KnownCallCount:           3,
+					UnknownCallCount:         4,
+					UniqueKnownCalledIDs:     []string{"github", "private_called_mcp"},
+					UniqueUnknownCalledCount: 2,
+					UtilizationRatioPct:      20,
+					ContextEfficiencyBucket:  "low",
+					WarningBand:              analyzer.WarningBandHigh,
+				},
+				Skill: analyzer.SkillUtilization{
+					KnownExposedIDs:         []string{"qa", "private_skill_acme"},
+					UnknownExposedCount:     1,
+					ExposedCountBucket:      "6_10",
+					ContextTokenBucket:      "5k_10k",
+					ExposureKnown:           true,
+					InferenceSource:         analyzer.InferenceSourceHeader,
+					ExecutedCount:           1,
+					KnownExecutedIDs:        []string{"qa", "secret_exec_skill"},
+					UnknownExecutedCount:    1,
+					UtilizationRatioPct:     10,
+					ContextEfficiencyBucket: "low",
+					WarningBand:             analyzer.WarningBandWatch,
+				},
+			},
+		},
+		Recommendation: &analyzer.RecommendationSet{
+			Primary: &analyzer.TokenSavingRecommendation{
+				RecommendationID: "rtk::shell_output_bloat",
+				PrimaryToolID:    "rtk",
+				Reason:           analyzer.ReasonAbsent,
+				SignalIDs:        []analyzer.Signal{analyzer.SignalShellOutputBloat},
+				Confidence:       analyzer.ConfidenceHigh,
+				RiskLevel:        analyzer.RiskHigh,
+				DataMovementRisk: analyzer.RiskHigh,
+				InstallPolicy:    analyzer.PolicyRecommendWithWaiver,
+				InstallSurface:   "local_binary_plus_claude_hook",
+				EvidenceCounts:   map[analyzer.EvidenceSource]int{analyzer.EvidenceLogActiveCommand: 4},
+			},
+			Secondary: &analyzer.TokenSavingRecommendation{
+				RecommendationID: "context_mode::mcp_tool_output_bloat",
+				PrimaryToolID:    "context_mode",
+				Reason:           analyzer.ReasonAbsent,
+				SignalIDs:        []analyzer.Signal{analyzer.SignalMCPToolOutputBloat},
+				Confidence:       analyzer.ConfidenceMedium,
+				RiskLevel:        analyzer.RiskLow,
+				DataMovementRisk: analyzer.RiskLow,
+				InstallPolicy:    analyzer.PolicyRecommend,
+				InstallSurface:   "claude_plugin_plus_mcp",
+				EvidenceCounts:   map[analyzer.EvidenceSource]int{analyzer.EvidenceMCPConfigured: 2},
+			},
+		},
+	}
+
+	profile := GeneratePaidPackProfile(report)
+
+	if got, want := profile.MCP.KnownConfiguredIDs, []string{"github"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("MCP known IDs = %#v, want %#v", got, want)
+	}
+	if got, want := profile.Skill.KnownConfiguredIDs, []string{"qa"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("skill known IDs = %#v, want %#v", got, want)
+	}
+	if !profile.Waiver.Required {
+		t.Fatalf("expected waiver to be required for high-risk third-party setup: %#v", profile.Waiver)
+	}
+	if !strings.Contains(profile.Waiver.Language, "third-party") || !strings.Contains(profile.Waiver.Language, "Claude-executed setup") {
+		t.Fatalf("waiver language missing third-party/Claude-executed setup gate: %#v", profile.Waiver)
+	}
+	if len(profile.VettedTools) != 2 || profile.VettedTools[0].ID != "context_mode" || profile.VettedTools[1].ID != "rtk" {
+		t.Fatalf("expected sorted allowlisted paid tools, got %#v", profile.VettedTools)
+	}
+	if !profile.VettedTools[1].WaiverRequired || profile.VettedTools[1].RollbackGuidance == "" {
+		t.Fatalf("expected RTK waiver and rollback guidance: %#v", profile.VettedTools[1])
+	}
+	body := mustJSON(t, profile)
+	for _, forbidden := range []string{
+		"private_mcp_acme",
+		"private_called_mcp",
+		"private_skill_acme",
+		"secret_exec_skill",
+		"/Users/alice/private",
+		"repo-secret",
+		"prompt-secret",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("paid pack profile leaked %q: %s", forbidden, body)
+		}
+	}
+	first := mustJSON(t, GeneratePaidPackProfile(report))
+	second := mustJSON(t, GeneratePaidPackProfile(report))
+	if first != second {
+		t.Fatalf("expected deterministic paid pack profile\nfirst=%s\nsecond=%s", first, second)
+	}
+}
+
+func TestGenerateIncludesPaidPackProfileFile(t *testing.T) {
+	report := analyzer.Report{
+		Version: "0.1.0",
+		Ecosystem: analyzer.Ecosystem{
+			ToolingUtilization: analyzer.ToolingUtilization{
+				MCP: analyzer.MCPUtilization{
+					KnownServerIDs:     []string{"github", "private_mcp_acme"},
+					UnknownServerCount: 1,
+					WarningBand:        analyzer.WarningBandHigh,
+				},
+				Skill: analyzer.SkillUtilization{
+					KnownExposedIDs:     []string{"qa", "private_skill_acme"},
+					UnknownExposedCount: 1,
+					WarningBand:         analyzer.WarningBandWatch,
+				},
+			},
+		},
+	}
+
+	artifact := Generate(report, Options{GeneratedAt: time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)})
+
+	if !hasFile(artifact, "PAID-PACK-PROFILE.json") {
+		t.Fatalf("expected paid pack profile file in artifact")
+	}
+	content := fileContent(t, artifact, "PAID-PACK-PROFILE.json")
+	if !strings.Contains(content, `"schema_version": "2026-05-31-paid-pack-profile"`) ||
+		!strings.Contains(content, `"privacy_boundary"`) ||
+		!strings.Contains(content, `"mcp"`) ||
+		!strings.Contains(content, `"skill"`) {
+		t.Fatalf("paid pack profile file missing expected sections:\n%s", content)
+	}
+	if strings.Contains(content, "private_mcp_acme") || strings.Contains(content, "private_skill_acme") {
+		t.Fatalf("paid pack profile leaked private IDs:\n%s", content)
+	}
+}
+
 func hasFile(artifact Artifact, path string) bool {
 	for _, file := range artifact.Files {
 		if file.Path == path {

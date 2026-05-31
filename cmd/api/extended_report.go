@@ -62,6 +62,10 @@ func renderDownloadPackage(job app.Job, report analyzer.Report) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+	paidPackProfileJSON, err := json.MarshalIndent(remediation.GeneratePaidPackProfile(report), "", "  ")
+	if err != nil {
+		return nil, err
+	}
 	pluginPreview := renderPluginPreviewMarkdown(report)
 	voucherText := renderSpecKittyVoucherText(voucherCode, job.ID)
 
@@ -74,6 +78,7 @@ func renderDownloadPackage(job app.Job, report analyzer.Report) ([]byte, error) 
 		{name: "agent-token-saving-field-guide.pdf", data: guidePDF},
 		{name: "personalized-agent-analyzer-report.pdf", data: reportPDF},
 		{name: "agent-analyzer-report.json", data: append(reportJSON, '\n')},
+		{name: "paid-pack-profile.json", data: append(paidPackProfileJSON, '\n')},
 		{name: "plugin-preview.md", data: []byte(pluginPreview)},
 		{name: "partner-vouchers/spec-kitty-training-voucher.pdf", data: voucherPDF},
 		{name: "partner-vouchers/spec-kitty-training-voucher.txt", data: []byte(voucherText)},
@@ -197,6 +202,7 @@ func renderExtendedMarkdown(report analyzer.Report) string {
 
 func renderPluginPreviewMarkdown(report analyzer.Report) string {
 	artifact := remediation.Generate(report, remediation.Options{GeneratedAt: deterministicPDFTime()})
+	paidPackProfile := remediation.GeneratePaidPackProfile(report)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Agent Analyzer Plugin Preview\n\n")
 	fmt.Fprintf(&b, "The custom artifact turns this report into Claude Code plugin guidance plus harness-specific instructions for Codex, OpenCode, Cursor, Kiro, Antigravity, and Claude Desktop MCP. Reports can also originate from Claude Desktop local/session logs; Desktop remediation currently uses the MCP connector guidance. It is generated from sanitized report JSON only.\n\n")
@@ -213,6 +219,10 @@ func renderPluginPreviewMarkdown(report analyzer.Report) string {
 			fmt.Fprintf(&b, "- **%s**: %s\n", customization.ID, customization.Reason)
 		}
 	}
+	fmt.Fprintf(&b, "\n## Paid pack profile\n\n")
+	fmt.Fprintf(&b, "- MCP warning band: `%s`; known configured IDs: `%s`; unknown configured count: `%d`.\n", paidPackProfile.MCP.WarningBand, strings.Join(paidPackProfile.MCP.KnownConfiguredIDs, "`, `"), paidPackProfile.MCP.UnknownConfiguredCount)
+	fmt.Fprintf(&b, "- Skill warning band: `%s`; known configured IDs: `%s`; unknown configured count: `%d`.\n", paidPackProfile.Skill.WarningBand, strings.Join(paidPackProfile.Skill.KnownConfiguredIDs, "`, `"), paidPackProfile.Skill.UnknownConfiguredCount)
+	fmt.Fprintf(&b, "- Waiver required before third-party or Claude-executed setup: `%t`.\n", paidPackProfile.Waiver.Required)
 	fmt.Fprintf(&b, "\n## Vetted recommendations\n\n")
 	if len(artifact.VettedRecommendations) == 0 {
 		fmt.Fprintf(&b, "- No tool recommendations selected.\n")

@@ -257,6 +257,11 @@ func baseFiles(report analyzer.Report, pluginName string, recommendations []Tool
 			Content: toolCatalogJSON(recommendations),
 		},
 		{
+			Path:    "PAID-PACK-PROFILE.json",
+			Mode:    "0644",
+			Content: paidPackProfileJSON(report),
+		},
+		{
 			Path:    "WAIVER.md",
 			Mode:    "0644",
 			Content: waiverFile(acknowledgment),

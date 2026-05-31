@@ -505,6 +505,7 @@ func TestGetExtendedReportDownloadsPackage(t *testing.T) {
 		"agent-token-saving-field-guide.pdf",
 		"personalized-agent-analyzer-report.pdf",
 		"agent-analyzer-report.json",
+		"paid-pack-profile.json",
 		"plugin-preview.md",
 		"partner-vouchers/spec-kitty-training-voucher.pdf",
 		"partner-vouchers/spec-kitty-training-voucher.txt",
@@ -525,9 +526,16 @@ func TestGetExtendedReportDownloadsPackage(t *testing.T) {
 	if !bytes.Contains(reportJSON, []byte(`"job_id": "job-1234567890"`)) || bytes.Contains(reportJSON, []byte("raw transcript")) {
 		t.Fatalf("sanitized JSON entry unexpected:\n%s", string(reportJSON))
 	}
+	paidPackProfile := mustZipEntry(t, reader, "paid-pack-profile.json")
+	if !bytes.Contains(paidPackProfile, []byte(`"schema_version": "2026-05-31-paid-pack-profile"`)) ||
+		!bytes.Contains(paidPackProfile, []byte(`"privacy_boundary"`)) ||
+		bytes.Contains(paidPackProfile, []byte("raw transcript")) {
+		t.Fatalf("paid pack profile entry unexpected:\n%s", string(paidPackProfile))
+	}
 	preview := mustZipEntry(t, reader, "plugin-preview.md")
 	if !bytes.Contains(preview, []byte("Plugin Preview")) ||
 		!bytes.Contains(preview, []byte("Harness install matrix")) ||
+		!bytes.Contains(preview, []byte("Paid pack profile")) ||
 		!bytes.Contains(preview, []byte("Codex")) ||
 		!bytes.Contains(preview, []byte("sanitized report JSON only")) {
 		t.Fatalf("plugin preview missing expected copy:\n%s", string(preview))
@@ -580,6 +588,7 @@ func TestExtendedReportPackageUsesRealReportFixtures(t *testing.T) {
 				"agent-token-saving-field-guide.pdf",
 				"personalized-agent-analyzer-report.pdf",
 				"agent-analyzer-report.json",
+				"paid-pack-profile.json",
 				"plugin-preview.md",
 			} {
 				_ = mustZipEntry(t, reader, want)
