@@ -132,6 +132,23 @@ func TestPatchSurvival_WritesPrivacySafeReport(t *testing.T) {
 	if len(debugReport.Files) != 1 || debugReport.Files[0].Path != "feature.txt" {
 		t.Fatalf("expected explicit local path exposure, got %#v", debugReport.Files)
 	}
+
+	secondDiffPath := filepath.Join(dir, "patch-2.diff")
+	writeLogContent(t, secondDiffPath, strings.Join([]string{
+		"diff --git a/feature.txt b/feature.txt",
+		"@@ -1 +1,2 @@",
+		"+added line",
+	}, "\n"))
+	diffListPath := filepath.Join(dir, "diff-list.txt")
+	writeLogContent(t, diffListPath, diffPath+"\n\n"+secondDiffPath+"\n")
+	batchOut := filepath.Join(dir, "patch-survival-batch.json")
+	if err := runPatchSurvival([]string{"--repo", repo, "--diff-list", diffListPath, "--out", batchOut}); err != nil {
+		t.Fatalf("runPatchSurvival batch: %v", err)
+	}
+	batchReport := readPatchSurvivalReport(t, batchOut)
+	if batchReport.Summary.DiffCount != 2 || batchReport.Summary.FileCount != 2 || batchReport.Summary.Survived != 2 {
+		t.Fatalf("unexpected batch report: %#v", batchReport.Summary)
+	}
 }
 
 func newPatchSurvivalFixtureRepo(t *testing.T, root string) string {
@@ -159,6 +176,7 @@ func runPatchSurvivalGit(t *testing.T, repo string, args ...string) {
 
 func readPatchSurvivalReport(t *testing.T, path string) struct {
 	Summary struct {
+		DiffCount  int `json:"diff_count"`
 		FileCount  int `json:"file_count"`
 		Survived   int `json:"survived"`
 		PatchYield *struct {
@@ -178,6 +196,7 @@ func readPatchSurvivalReport(t *testing.T, path string) struct {
 	}
 	var report struct {
 		Summary struct {
+			DiffCount  int `json:"diff_count"`
 			FileCount  int `json:"file_count"`
 			Survived   int `json:"survived"`
 			PatchYield *struct {

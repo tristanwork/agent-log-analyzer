@@ -17,4 +17,12 @@ When spend data is available, callers can provide total token count and model co
 agent-analyzer patch-survival --repo /path/to/repo --diff patch.diff --tokens 120000 --cost-usd 2.40 --out patch-survival.json
 ```
 
-This is the first local-only building block for paid patch-yield reporting. It supports comparing against `HEAD` or another selected ref so future scan jobs can report survived, modified, reverted, unknown, and yield aggregates while keeping cloud reports aggregate-only.
+For paid scans over many agent sessions, write one diff path per line and run the same aggregate analysis in batch mode:
+
+```sh
+agent-analyzer patch-survival --repo /path/to/repo --diff-list session-diffs.txt --cache-files 1000 --out patch-survival-batch.json
+```
+
+Blank lines and `#` comments are ignored in the diff list. Relative paths are resolved from the list file location. Batch mode shares a bounded target-file cache across all diffs, reports `diff_count`, and still emits only aggregate-safe file results.
+
+This is the first local-only building block for paid patch-yield reporting. It supports comparing against `HEAD` or another selected ref so scan jobs can report survived, modified, reverted, unknown, and yield aggregates while keeping cloud reports aggregate-only.

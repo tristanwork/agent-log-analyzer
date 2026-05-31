@@ -15,6 +15,8 @@ import (
 	"strings"
 )
 
+const defaultMaxCachedFiles = 1024
+
 type Status string
 
 const (
@@ -25,11 +27,12 @@ const (
 )
 
 type Options struct {
-	RepoRoot    string
-	Ref         string
-	ExposePaths bool
-	TokenCount  int
-	CostUSD     float64
+	RepoRoot       string
+	Ref            string
+	ExposePaths    bool
+	TokenCount     int
+	CostUSD        float64
+	MaxCachedFiles int
 }
 
 type Result struct {
@@ -38,6 +41,7 @@ type Result struct {
 }
 
 type Summary struct {
+	DiffCount         int         `json:"diff_count,omitempty"`
 	FileCount         int         `json:"file_count"`
 	HunkCount         int         `json:"hunk_count"`
 	AddedLineCount    int         `json:"added_line_count"`
@@ -72,42 +76,86 @@ type diffFile struct {
 	addedLines []string
 }
 
+type survivalAnalyzer struct {
+	options    Options
+	cacheLimit int
+	cache      map[string]cachedContent
+	cacheOrder []string
+}
+
+type cachedContent struct {
+	data []byte
+	err  error
+}
+
 func AnalyzeUnifiedDiff(ctx context.Context, diff []byte, options Options) (Result, error) {
+	return AnalyzeUnifiedDiffBatch(ctx, [][]byte{diff}, options)
+}
+
+func AnalyzeUnifiedDiffBatch(ctx context.Context, diffs [][]byte, options Options) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	options.RepoRoot = strings.TrimSpace(options.RepoRoot)
-	if options.RepoRoot == "" {
-		return Result{}, errors.New("repo root is required")
+	if len(diffs) == 0 {
+		return Result{}, errors.New("at least one diff is required")
 	}
-	files, err := parseUnifiedDiff(diff)
+	analyzer, err := newSurvivalAnalyzer(options)
 	if err != nil {
 		return Result{}, err
 	}
-	if len(files) == 0 {
-		return Result{}, errors.New("diff contains no file hunks")
-	}
-	result := Result{Files: make([]FileResult, 0, len(files))}
-	for _, file := range files {
-		fileResult := analyzeFile(ctx, file, options)
-		result.Files = append(result.Files, fileResult)
-		result.Summary.FileCount++
-		result.Summary.HunkCount += fileResult.HunkCount
-		result.Summary.AddedLineCount += fileResult.AddedLineCount
-		result.Summary.SurvivedLineCount += fileResult.SurvivedLineCount
-		switch fileResult.Status {
-		case StatusSurvived:
-			result.Summary.Survived++
-		case StatusModified:
-			result.Summary.Modified++
-		case StatusReverted:
-			result.Summary.Reverted++
-		default:
-			result.Summary.Unknown++
+	result := Result{Files: make([]FileResult, 0, len(diffs))}
+	result.Summary.DiffCount = len(diffs)
+	for index, diff := range diffs {
+		files, err := parseUnifiedDiff(diff)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(files) == 0 {
+			if len(diffs) == 1 {
+				return Result{}, errors.New("diff contains no file hunks")
+			}
+			return Result{}, fmt.Errorf("diff %d contains no file hunks", index+1)
+		}
+		for _, file := range files {
+			fileResult := analyzer.analyzeFile(ctx, file)
+			result.Files = append(result.Files, fileResult)
+			result.Summary.FileCount++
+			result.Summary.HunkCount += fileResult.HunkCount
+			result.Summary.AddedLineCount += fileResult.AddedLineCount
+			result.Summary.SurvivedLineCount += fileResult.SurvivedLineCount
+			switch fileResult.Status {
+			case StatusSurvived:
+				result.Summary.Survived++
+			case StatusModified:
+				result.Summary.Modified++
+			case StatusReverted:
+				result.Summary.Reverted++
+			default:
+				result.Summary.Unknown++
+			}
 		}
 	}
-	result.Summary.PatchYield = computePatchYield(result.Summary.SurvivedLineCount, options)
+	result.Summary.PatchYield = computePatchYield(result.Summary.SurvivedLineCount, analyzer.options)
 	return result, nil
+}
+
+func newSurvivalAnalyzer(options Options) (*survivalAnalyzer, error) {
+	options.RepoRoot = strings.TrimSpace(options.RepoRoot)
+	if options.RepoRoot == "" {
+		return nil, errors.New("repo root is required")
+	}
+	if options.MaxCachedFiles < 0 {
+		return nil, errors.New("max cached files cannot be negative")
+	}
+	cacheLimit := options.MaxCachedFiles
+	if cacheLimit == 0 {
+		cacheLimit = defaultMaxCachedFiles
+	}
+	return &survivalAnalyzer{
+		options:    options,
+		cacheLimit: cacheLimit,
+		cache:      make(map[string]cachedContent),
+	}, nil
 }
 
 func computePatchYield(survivedLines int, options Options) *PatchYield {
@@ -186,21 +234,21 @@ func parseUnifiedDiff(diff []byte) ([]diffFile, error) {
 	return files, nil
 }
 
-func analyzeFile(ctx context.Context, file diffFile, options Options) FileResult {
+func (analyzer *survivalAnalyzer) analyzeFile(ctx context.Context, file diffFile) FileResult {
 	result := FileResult{
 		PathHash:       hashPath(file.path),
 		Status:         StatusUnknown,
 		HunkCount:      file.hunkCount,
 		AddedLineCount: len(file.addedLines),
 	}
-	if options.ExposePaths {
+	if analyzer.options.ExposePaths {
 		result.Path = file.path
 	}
 	if len(file.addedLines) == 0 {
 		result.Reason = "no_added_lines"
 		return result
 	}
-	content, err := targetFileContent(ctx, options, file.path)
+	content, err := analyzer.targetFileContent(ctx, file.path)
 	if err != nil {
 		result.Reason = "target_unavailable"
 		return result
@@ -220,6 +268,33 @@ func analyzeFile(ctx context.Context, file diffFile, options Options) FileResult
 		result.Status = StatusModified
 	}
 	return result
+}
+
+func (analyzer *survivalAnalyzer) targetFileContent(ctx context.Context, path string) ([]byte, error) {
+	key := analyzer.options.Ref + "\x00" + path
+	if cached, ok := analyzer.cache[key]; ok {
+		return cached.data, cached.err
+	}
+	data, err := targetFileContent(ctx, analyzer.options, path)
+	analyzer.storeCachedContent(key, data, err)
+	return data, err
+}
+
+func (analyzer *survivalAnalyzer) storeCachedContent(key string, data []byte, err error) {
+	if analyzer.cacheLimit <= 0 {
+		return
+	}
+	if _, ok := analyzer.cache[key]; ok {
+		analyzer.cache[key] = cachedContent{data: data, err: err}
+		return
+	}
+	for len(analyzer.cacheOrder) >= analyzer.cacheLimit {
+		oldest := analyzer.cacheOrder[0]
+		analyzer.cacheOrder = analyzer.cacheOrder[1:]
+		delete(analyzer.cache, oldest)
+	}
+	analyzer.cache[key] = cachedContent{data: data, err: err}
+	analyzer.cacheOrder = append(analyzer.cacheOrder, key)
 }
 
 func targetFileContent(ctx context.Context, options Options, path string) ([]byte, error) {

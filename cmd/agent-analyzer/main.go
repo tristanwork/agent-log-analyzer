@@ -88,10 +88,12 @@ func runPatchSurvival(args []string) error {
 	fs := flag.NewFlagSet("patch-survival", flag.ContinueOnError)
 	repo := fs.String("repo", ".", "path to the repository root to inspect")
 	diffPath := fs.String("diff", "", "path to a unified diff file")
+	diffListPath := fs.String("diff-list", "", "path to a newline-delimited list of unified diff files")
 	out := fs.String("out", "patch-survival.json", "path to write patch survival JSON")
 	ref := fs.String("ref", "", "optional git ref to inspect instead of the working tree")
 	tokens := fs.Int("tokens", 0, "optional total model tokens for patch-yield-per-token")
 	costUSD := fs.Float64("cost-usd", 0, "optional model spend in USD for patch-yield-per-dollar")
+	cacheFiles := fs.Int("cache-files", 1024, "maximum target files to cache during batch analysis")
 	debugPaths := fs.Bool("debug-paths", false, "include raw repo-relative paths in local debug output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -102,7 +104,13 @@ func runPatchSurvival(args []string) error {
 	if *costUSD < 0 {
 		return errors.New("agent-analyzer patch-survival: --cost-usd cannot be negative")
 	}
+	if *cacheFiles < 0 {
+		return errors.New("agent-analyzer patch-survival: --cache-files cannot be negative")
+	}
 	positional := fs.Args()
+	if *diffListPath != "" && (*diffPath != "" || len(positional) > 0) {
+		return errors.New("agent-analyzer patch-survival: cannot combine --diff-list with --diff or positional diff path")
+	}
 	if *diffPath != "" && len(positional) > 0 {
 		return errors.New("agent-analyzer patch-survival: cannot combine --diff with positional diff path")
 	}
@@ -112,25 +120,44 @@ func runPatchSurvival(args []string) error {
 	if len(positional) > 1 {
 		return fmt.Errorf("agent-analyzer patch-survival: unexpected extra argument %q", positional[1])
 	}
-	if *diffPath == "" {
-		return errors.New("agent-analyzer patch-survival: --diff or a positional diff path is required")
+	if *diffPath == "" && *diffListPath == "" {
+		return errors.New("agent-analyzer patch-survival: --diff, --diff-list, or a positional diff path is required")
 	}
 
 	repoRoot, err := filepath.Abs(*repo)
 	if err != nil {
 		return err
 	}
-	diff, err := os.ReadFile(*diffPath)
-	if err != nil {
-		return err
+	options := patchsurvival.Options{
+		RepoRoot:       repoRoot,
+		Ref:            *ref,
+		ExposePaths:    *debugPaths,
+		TokenCount:     *tokens,
+		CostUSD:        *costUSD,
+		MaxCachedFiles: *cacheFiles,
 	}
-	result, err := patchsurvival.AnalyzeUnifiedDiff(context.Background(), diff, patchsurvival.Options{
-		RepoRoot:    repoRoot,
-		Ref:         *ref,
-		ExposePaths: *debugPaths,
-		TokenCount:  *tokens,
-		CostUSD:     *costUSD,
-	})
+	var result patchsurvival.Result
+	if *diffListPath != "" {
+		diffPaths, err := readDiffList(*diffListPath)
+		if err != nil {
+			return err
+		}
+		diffs := make([][]byte, 0, len(diffPaths))
+		for _, path := range diffPaths {
+			diff, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read diff list entry %s: %w", path, err)
+			}
+			diffs = append(diffs, diff)
+		}
+		result, err = patchsurvival.AnalyzeUnifiedDiffBatch(context.Background(), diffs, options)
+	} else {
+		diff, err := os.ReadFile(*diffPath)
+		if err != nil {
+			return err
+		}
+		result, err = patchsurvival.AnalyzeUnifiedDiff(context.Background(), diff, options)
+	}
 	if err != nil {
 		return err
 	}
@@ -157,6 +184,33 @@ func runPatchSurvival(args []string) error {
 		)
 	}
 	return nil
+}
+
+func readDiffList(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	baseDir := filepath.Dir(path)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	var paths []string
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !filepath.IsAbs(line) {
+			line = filepath.Join(baseDir, line)
+		}
+		paths = append(paths, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("agent-analyzer patch-survival: --diff-list contains no diff paths")
+	}
+	return paths, nil
 }
 
 // defaultSupportedLogsFn and recentSupportedLogsFn are package-level
@@ -2996,7 +3050,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --paid         legacy alias: analyze target-sized recent supported logs locally and write a sanitized aggregate report.")
 	fmt.Fprintf(os.Stderr, "  --limit <n>    maximum recent logs per source for aggregate modes, capped at %d (default: %d).\n", maxAutoLogLimit, defaultAutoLogLimit)
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "  agent-analyzer patch-survival [--repo <repo>] [--diff <patch.diff>] [--out <path>] [--ref <git-ref>] [--tokens <n>] [--cost-usd <n>] [--debug-paths]")
+	fmt.Fprintln(os.Stderr, "  agent-analyzer patch-survival [--repo <repo>] [--diff <patch.diff> | --diff-list <paths.txt>] [--out <path>] [--ref <git-ref>] [--tokens <n>] [--cost-usd <n>] [--cache-files <n>] [--debug-paths]")
 	fmt.Fprintln(os.Stderr, "                 write aggregate-safe patch survival JSON from a unified diff.")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  agent-analyzer upload <sanitized-report.json> [--base-url https://analyzer.spec-kitty.ai]")

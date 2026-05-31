@@ -85,6 +85,55 @@ func TestAnalyzeUnifiedDiffComputesPatchYieldWhenSpendIsAvailable(t *testing.T) 
 	}
 }
 
+func TestAnalyzeUnifiedDiffBatchAggregatesMultipleDiffs(t *testing.T) {
+	repo := newGitRepo(t)
+	writeFile(t, repo, "one.txt", "base\nkept one\n")
+	writeFile(t, repo, "two.txt", "base\nkept two\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+
+	diffs := [][]byte{
+		[]byte(strings.Join([]string{
+			"diff --git a/one.txt b/one.txt",
+			"@@ -1 +1,2 @@",
+			"+kept one",
+		}, "\n")),
+		[]byte(strings.Join([]string{
+			"diff --git a/two.txt b/two.txt",
+			"@@ -1 +1,3 @@",
+			"+kept two",
+			"+dropped two",
+		}, "\n")),
+	}
+
+	result, err := AnalyzeUnifiedDiffBatch(context.Background(), diffs, Options{
+		RepoRoot:       repo,
+		TokenCount:     2000,
+		CostUSD:        0.25,
+		MaxCachedFiles: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.DiffCount != 2 || result.Summary.FileCount != 2 || result.Summary.HunkCount != 2 {
+		t.Fatalf("unexpected batch counters: %#v", result.Summary)
+	}
+	if result.Summary.Survived != 1 || result.Summary.Modified != 1 {
+		t.Fatalf("unexpected batch buckets: %#v", result.Summary)
+	}
+	if result.Summary.AddedLineCount != 3 || result.Summary.SurvivedLineCount != 2 {
+		t.Fatalf("unexpected batch line counts: %#v", result.Summary)
+	}
+	if result.Summary.PatchYield == nil || result.Summary.PatchYield.SurvivedLinesPer1KTokens != 1 || result.Summary.PatchYield.SurvivedLinesPerDollar != 8 {
+		t.Fatalf("unexpected batch yield: %#v", result.Summary.PatchYield)
+	}
+	for _, file := range result.Files {
+		if file.Path != "" {
+			t.Fatalf("paths should remain hidden in batch output: %#v", file)
+		}
+	}
+}
+
 func TestAnalyzeUnifiedDiffCanCompareAgainstSelectedRef(t *testing.T) {
 	repo := newGitRepo(t)
 	writeFile(t, repo, "feature.txt", "base\nsurvived in head\n")
