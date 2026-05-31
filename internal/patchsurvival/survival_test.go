@@ -40,6 +40,9 @@ func TestAnalyzeUnifiedDiffClassifiesPatchSurvival(t *testing.T) {
 	if result.Summary.Survived != 1 || result.Summary.Modified != 1 || result.Summary.Reverted != 1 || result.Summary.Unknown != 1 {
 		t.Fatalf("unexpected summary: %#v", result.Summary)
 	}
+	if result.Summary.AddedLineCount != 5 || result.Summary.SurvivedLineCount != 2 {
+		t.Fatalf("unexpected line counts: %#v", result.Summary)
+	}
 	for _, file := range result.Files {
 		if file.Path != "" {
 			t.Fatalf("paths should be hidden by default: %#v", file)
@@ -47,6 +50,38 @@ func TestAnalyzeUnifiedDiffClassifiesPatchSurvival(t *testing.T) {
 		if file.PathHash == "" {
 			t.Fatalf("expected path hash: %#v", file)
 		}
+	}
+}
+
+func TestAnalyzeUnifiedDiffComputesPatchYieldWhenSpendIsAvailable(t *testing.T) {
+	repo := newGitRepo(t)
+	writeFile(t, repo, "yield.txt", "base\none\ntwo\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+
+	diff := strings.Join([]string{
+		"diff --git a/yield.txt b/yield.txt",
+		"@@ -1 +1,3 @@",
+		"+one",
+		"+two",
+	}, "\n")
+
+	result, err := AnalyzeUnifiedDiff(context.Background(), []byte(diff), Options{
+		RepoRoot:   repo,
+		TokenCount: 4000,
+		CostUSD:    0.50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.PatchYield == nil {
+		t.Fatalf("expected patch yield: %#v", result.Summary)
+	}
+	if result.Summary.PatchYield.SurvivedLinesPer1KTokens != 0.5 {
+		t.Fatalf("unexpected token yield: %#v", result.Summary.PatchYield)
+	}
+	if result.Summary.PatchYield.SurvivedLinesPerDollar != 4 {
+		t.Fatalf("unexpected dollar yield: %#v", result.Summary.PatchYield)
 	}
 }
 

@@ -104,7 +104,7 @@ func TestPatchSurvival_WritesPrivacySafeReport(t *testing.T) {
 	}, "\n"))
 
 	outPath := filepath.Join(dir, "patch-survival.json")
-	if err := runPatchSurvival([]string{"--repo", repo, "--diff", diffPath, "--out", outPath}); err != nil {
+	if err := runPatchSurvival([]string{"--repo", repo, "--diff", diffPath, "--out", outPath, "--tokens", "1000", "--cost-usd", "0.50"}); err != nil {
 		t.Fatalf("runPatchSurvival: %v", err)
 	}
 	report := readPatchSurvivalReport(t, outPath)
@@ -119,6 +119,9 @@ func TestPatchSurvival_WritesPrivacySafeReport(t *testing.T) {
 	}
 	if report.Files[0].PathHash == "" {
 		t.Fatalf("expected path hash: %#v", report.Files[0])
+	}
+	if report.Summary.PatchYield == nil || report.Summary.PatchYield.SurvivedLinesPer1KTokens != 1 || report.Summary.PatchYield.SurvivedLinesPerDollar != 2 {
+		t.Fatalf("unexpected patch yield: %#v", report.Summary.PatchYield)
 	}
 
 	debugOut := filepath.Join(dir, "patch-survival-debug.json")
@@ -156,8 +159,12 @@ func runPatchSurvivalGit(t *testing.T, repo string, args ...string) {
 
 func readPatchSurvivalReport(t *testing.T, path string) struct {
 	Summary struct {
-		FileCount int `json:"file_count"`
-		Survived  int `json:"survived"`
+		FileCount  int `json:"file_count"`
+		Survived   int `json:"survived"`
+		PatchYield *struct {
+			SurvivedLinesPer1KTokens float64 `json:"survived_lines_per_1k_tokens"`
+			SurvivedLinesPerDollar   float64 `json:"survived_lines_per_dollar"`
+		} `json:"patch_yield"`
 	} `json:"summary"`
 	Files []struct {
 		Path     string `json:"path"`
@@ -171,8 +178,12 @@ func readPatchSurvivalReport(t *testing.T, path string) struct {
 	}
 	var report struct {
 		Summary struct {
-			FileCount int `json:"file_count"`
-			Survived  int `json:"survived"`
+			FileCount  int `json:"file_count"`
+			Survived   int `json:"survived"`
+			PatchYield *struct {
+				SurvivedLinesPer1KTokens float64 `json:"survived_lines_per_1k_tokens"`
+				SurvivedLinesPerDollar   float64 `json:"survived_lines_per_dollar"`
+			} `json:"patch_yield"`
 		} `json:"summary"`
 		Files []struct {
 			Path     string `json:"path"`

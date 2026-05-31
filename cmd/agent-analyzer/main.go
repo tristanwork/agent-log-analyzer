@@ -90,9 +90,17 @@ func runPatchSurvival(args []string) error {
 	diffPath := fs.String("diff", "", "path to a unified diff file")
 	out := fs.String("out", "patch-survival.json", "path to write patch survival JSON")
 	ref := fs.String("ref", "", "optional git ref to inspect instead of the working tree")
+	tokens := fs.Int("tokens", 0, "optional total model tokens for patch-yield-per-token")
+	costUSD := fs.Float64("cost-usd", 0, "optional model spend in USD for patch-yield-per-dollar")
 	debugPaths := fs.Bool("debug-paths", false, "include raw repo-relative paths in local debug output")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *tokens < 0 {
+		return errors.New("agent-analyzer patch-survival: --tokens cannot be negative")
+	}
+	if *costUSD < 0 {
+		return errors.New("agent-analyzer patch-survival: --cost-usd cannot be negative")
 	}
 	positional := fs.Args()
 	if *diffPath != "" && len(positional) > 0 {
@@ -120,6 +128,8 @@ func runPatchSurvival(args []string) error {
 		RepoRoot:    repoRoot,
 		Ref:         *ref,
 		ExposePaths: *debugPaths,
+		TokenCount:  *tokens,
+		CostUSD:     *costUSD,
 	})
 	if err != nil {
 		return err
@@ -140,6 +150,12 @@ func runPatchSurvival(args []string) error {
 		result.Summary.Reverted,
 		result.Summary.Unknown,
 	)
+	if result.Summary.PatchYield != nil {
+		fmt.Printf("Patch yield: %.2f survived lines / 1k tokens, %.2f survived lines / USD\n",
+			result.Summary.PatchYield.SurvivedLinesPer1KTokens,
+			result.Summary.PatchYield.SurvivedLinesPerDollar,
+		)
+	}
 	return nil
 }
 
@@ -2980,7 +2996,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --paid         legacy alias: analyze target-sized recent supported logs locally and write a sanitized aggregate report.")
 	fmt.Fprintf(os.Stderr, "  --limit <n>    maximum recent logs per source for aggregate modes, capped at %d (default: %d).\n", maxAutoLogLimit, defaultAutoLogLimit)
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "  agent-analyzer patch-survival [--repo <repo>] [--diff <patch.diff>] [--out <path>] [--ref <git-ref>] [--debug-paths]")
+	fmt.Fprintln(os.Stderr, "  agent-analyzer patch-survival [--repo <repo>] [--diff <patch.diff>] [--out <path>] [--ref <git-ref>] [--tokens <n>] [--cost-usd <n>] [--debug-paths]")
 	fmt.Fprintln(os.Stderr, "                 write aggregate-safe patch survival JSON from a unified diff.")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  agent-analyzer upload <sanitized-report.json> [--base-url https://analyzer.spec-kitty.ai]")

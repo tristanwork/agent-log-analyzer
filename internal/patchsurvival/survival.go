@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,8 @@ type Options struct {
 	RepoRoot    string
 	Ref         string
 	ExposePaths bool
+	TokenCount  int
+	CostUSD     float64
 }
 
 type Result struct {
@@ -35,12 +38,22 @@ type Result struct {
 }
 
 type Summary struct {
-	FileCount int `json:"file_count"`
-	HunkCount int `json:"hunk_count"`
-	Survived  int `json:"survived"`
-	Modified  int `json:"modified"`
-	Reverted  int `json:"reverted"`
-	Unknown   int `json:"unknown"`
+	FileCount         int         `json:"file_count"`
+	HunkCount         int         `json:"hunk_count"`
+	AddedLineCount    int         `json:"added_line_count"`
+	SurvivedLineCount int         `json:"survived_line_count"`
+	Survived          int         `json:"survived"`
+	Modified          int         `json:"modified"`
+	Reverted          int         `json:"reverted"`
+	Unknown           int         `json:"unknown"`
+	PatchYield        *PatchYield `json:"patch_yield,omitempty"`
+}
+
+type PatchYield struct {
+	TokenCount               int     `json:"token_count,omitempty"`
+	CostUSD                  float64 `json:"cost_usd,omitempty"`
+	SurvivedLinesPer1KTokens float64 `json:"survived_lines_per_1k_tokens,omitempty"`
+	SurvivedLinesPerDollar   float64 `json:"survived_lines_per_dollar,omitempty"`
 }
 
 type FileResult struct {
@@ -80,6 +93,8 @@ func AnalyzeUnifiedDiff(ctx context.Context, diff []byte, options Options) (Resu
 		result.Files = append(result.Files, fileResult)
 		result.Summary.FileCount++
 		result.Summary.HunkCount += fileResult.HunkCount
+		result.Summary.AddedLineCount += fileResult.AddedLineCount
+		result.Summary.SurvivedLineCount += fileResult.SurvivedLineCount
 		switch fileResult.Status {
 		case StatusSurvived:
 			result.Summary.Survived++
@@ -91,7 +106,28 @@ func AnalyzeUnifiedDiff(ctx context.Context, diff []byte, options Options) (Resu
 			result.Summary.Unknown++
 		}
 	}
+	result.Summary.PatchYield = computePatchYield(result.Summary.SurvivedLineCount, options)
 	return result, nil
+}
+
+func computePatchYield(survivedLines int, options Options) *PatchYield {
+	if options.TokenCount <= 0 && options.CostUSD <= 0 {
+		return nil
+	}
+	yield := &PatchYield{}
+	if options.TokenCount > 0 {
+		yield.TokenCount = options.TokenCount
+		yield.SurvivedLinesPer1KTokens = round2(float64(survivedLines) * 1000 / float64(options.TokenCount))
+	}
+	if options.CostUSD > 0 {
+		yield.CostUSD = round2(options.CostUSD)
+		yield.SurvivedLinesPerDollar = round2(float64(survivedLines) / options.CostUSD)
+	}
+	return yield
+}
+
+func round2(value float64) float64 {
+	return math.Round(value*100) / 100
 }
 
 func parseUnifiedDiff(diff []byte) ([]diffFile, error) {
